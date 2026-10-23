@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pii-sanitizer-agent — fail-closed PII redaction</title>
+<style>
+  :root { color-scheme: light dark; --accent: #b3261e; --ok: #146c2e; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         max-width: 880px; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; }
+  h1 { font-size: 1.7rem; margin-bottom: .2rem; }
+  .sub { opacity: .75; margin-top: 0; }
+  pre { background: rgba(127,127,127,.12); border: 1px solid rgba(127,127,127,.35);
+        border-radius: 8px; padding: 1rem; overflow-x: auto; font-size: .85rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .tag { display: inline-block; padding: .05rem .5rem; border-radius: 999px;
+         font-size: .78rem; border: 1px solid currentColor; }
+  .bad { color: var(--accent); } .good { color: var(--ok); }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { border: 1px solid rgba(127,127,127,.4); padding: .4rem .6rem; text-align: left; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+</style>
+</head>
+<body>
+<h1>pii-sanitizer-agent</h1>
+<p class="sub">Fail-closed PII redaction — library, CLI and prompt-sanitizing agent wrapper.
+Pure Python standard library. Offline. No API keys.</p>
+
+<h2>The idea</h2>
+<p>Most redaction scripts fail <em>open</em>: whatever their patterns miss sails
+through. For PII the costs are asymmetric — a missed card number is a breach,
+an over-redacted reference number is a shrug. So when detection is
+<strong>uncertain</strong>, this sanitizer redacts anyway and says so in the
+report (<code>AMBIGUOUS_NUMBER</code>).</p>
+
+<h2>Recorded demo (real CLI run on <code>examples/sample.txt</code>)</h2>
+<div class="grid">
+  <div>
+    <p><span class="tag bad">BEFORE — input</span></p>
+    <pre>Customer note (all values below are synthetic test data):
+
+Name: Test User
+Contact email: test.user@example.com, backup: admin@test-domain.org
+Phone (US): (415) 555-0132
+Phone (India): +91 98765 00000
+SSN on file: 123-45-6789
+Aadhaar on file: 9876 5432 1096
+Passport: A12345678 (US format sample)
+Card charged: 4242 4242 4242 4242
+Bank IBAN: GB29 NWBK 6016 1331 9268 19
+Deploy config snippet: api_key = "sk-testkey0123456789abcdefghij"
+Support reference number (not a real identifier): 99887766554433
+Please follow up with test.user@example.com about order 12345.</pre>
+  </div>
+  <div>
+    <p><span class="tag good">AFTER — redacted output</span></p>
+    <pre>Customer note (all values below are synthetic test data):
+
+Name: Test User
+Contact email: [EMAIL_1], backup: [EMAIL_2]
+Phone (US): [PHONE_1]
+Phone (India): [PHONE_2]
+SSN on file: [SSN_1]
+Aadhaar on file: [AADHAAR_1]
+Passport: [PASSPORT_1] (US format sample)
+Card charged: [CARD_1]
+Bank IBAN: [IBAN_1]
+Deploy config snippet: api_key = "[SECRET_1]"
+Support reference number (not a real identifier): [REDACTED_NUMBER_1]
+Please follow up with [EMAIL_1] about order 12345.</pre>
+  </div>
+</div>
+<p>Two behaviours to notice: the repeated email reuses <code>[EMAIL_1]</code>
+(same value → same token, so the text still reads coherently), and the
+14-digit “support reference number” — <em>not</em> a real identifier — is
+redacted anyway. That is fail-closed working as designed. The 5-digit order
+number is below identifier size and is left alone.</p>
+
+<h2>Report format (excerpt, <code>--report</code>)</h2>
+<p>The report never contains raw values — only types, spans and tokens — so it
+is safe to log.</p>
+<pre>{
+  "version": 1,
+  "fail_closed": true,
+  "total_findings": 12,
+  "counts_by_type": {
+    "EMAIL": 3, "PHONE": 2, "SSN": 1, "AADHAAR": 1, "PASSPORT": 1,
+    "CARD": 1, "IBAN": 1, "SECRET": 1, "AMBIGUOUS_NUMBER": 1
+  },
+  "has_high_severity": true,
+  "findings": [
+    {"type": "EMAIL", "start": 90, "end": 111, "token": "[EMAIL_1]",
+     "severity": "medium", "detector": "email"},
+    {"type": "CARD", "start": 311, "end": 330, "token": "[CARD_1]",
+     "severity": "high", "detector": "card_luhn"}
+  ],
+  "mapping": {"[EMAIL_1]": 2, "[EMAIL_2]": 1, "[CARD_1]": 1, "[SSN_1]": 1}
+}</pre>
+
+<h2>Detectors</h2>
+<table>
+  <tr><th>Type</th><th>Validation</th><th>Near-miss policy</th></tr>
+  <tr><td>EMAIL</td><td>shape</td><td>—</td></tr>
+  <tr><td>PHONE (US / intl / Indian)</td><td>shape</td><td>identifier-sized digit runs swept below</td></tr>
+  <tr><td>SSN</td><td>SSA structural rules</td><td>invalid dashed shapes redacted as ambiguous</td></tr>
+  <tr><td>AADHAAR</td><td>Verhoeff checksum</td><td>bad-checksum groupings redacted as ambiguous</td></tr>
+  <tr><td>PASSPORT</td><td>shape + context</td><td>context values must contain a digit</td></tr>
+  <tr><td>CARD</td><td>Luhn checksum</td><td>Luhn-failing card shapes redacted as ambiguous</td></tr>
+  <tr><td>IBAN</td><td>mod-97</td><td>bad mod-97 shapes redacted as ambiguous</td></tr>
+  <tr><td>SECRET</td><td>known prefixes, Bearer, <code>key = value</code></td><td>value-only redaction</td></tr>
+  <tr><td>AMBIGUOUS_NUMBER</td><td>none — the fail-closed sweep</td><td>11–19 digit runs</td></tr>
+</table>
+
+<h2>Use it</h2>
+<pre>pip install -e .
+python -m pii_sanitizer sanitize examples/sample.txt --report report.json
+
+from pii_sanitizer import PromptSanitizerAgent
+agent = PromptSanitizerAgent(block_on_high_severity=True)
+output, report = agent.run(prompt, my_llm_fn)  # callable only sees clean text</pre>
+
+<p>228 pytest cases cover every detector with positive and negative cases,
+the fail-closed near-miss policies, overlap resolution, allowlists, unicode,
+adversarial obfuscation (pinned as documented limitations), the agent
+blocking contract, and the CLI. MIT licensed.</p>
+</body>
+</html>

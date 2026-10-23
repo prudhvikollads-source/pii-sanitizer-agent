@@ -1,0 +1,14 @@
+Customer note (all values below are synthetic test data):
+
+Name: Test User
+Contact email: test.user@example.com, backup: admin@test-domain.org
+Phone (US): (415) 555-0132
+Phone (India): +91 98765 00000
+SSN on file: 123-45-6789
+Aadhaar on file: 9876 5432 1096
+Passport: A12345678 (US format sample)
+Card charged: 4242 4242 4242 4242
+Bank IBAN: GB29 NWBK 6016 1331 9268 19
+Deploy config snippet: api_key = "sk-testkey0123456789abcdefghij"
+Support reference number (not a real identifier): 99887766554433
+Please follow up with test.user@example.com about order 12345.
